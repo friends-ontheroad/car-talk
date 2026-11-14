@@ -5,15 +5,110 @@
 
 > 현대자동차그룹 차량용 앱 개발 공모전 출품작
 
-## 어떻게 동작하나
+## 주요 개발 범위 (1차)
+
+1차 시연 장면 두 개가 Pleos 에뮬레이터 두 대에서 끝까지 동작한다.
+
+- **장면 1:** A차가 왼쪽 깜빡이를 켜고 "출발합니다"를 고르면 → B차에 카드와 음성
+- **장면 2:** A차가 비상등을 켜고 "전방 특이사항 발생"을 고르면 → B차에 빨간 경고와 음성
+
+"시연 대체"는 동작은 하지만, Pleos API가 없거나 에뮬레이터에서 동작하지 않아 실제 차량과 다른 방식으로 구현한 것이다 ([아래](#pleos-sdkapi)).
+
+| 기능 | 상태 | 구현 위치 |
+|---|---|---|
+| 좌회전 깜빡이 → 후보 목록 (좌회전합니다·유턴합니다·출발합니다) | ✅ 동작 (Vehicle SDK) | `fe` CarDevices.kt |
+| 비상등 → 후보 목록 (주요 1~5번, 추가 6~10번) | ✅ 시연 대체 (adb 신호) | `fe` CarDevices.kt |
+| 터치로 고르기 → 확인창 → 전송 → 전송 완료 | ✅ 동작 | `fe` MessagingController.java, MessageBoard.kt |
+| 말로 고르기 ("N번 메시지 보내줘") | ✅ 시연 대체 (맥 음성 인식) | `bridge`, `fe` |
+| 차량 간 전달 + 수신 확인(ack) | ✅ 동작 | `fe` WebSocketMessageGateway.kt, `be` Relay.kt |
+| 수신 알림 (비상등 주요 메시지는 빨간 경고, 나머지는 흰 카드, 여러 개면 대기열) | ✅ 동작 | `fe` MessagingController.java |
+| 받은 메시지 읽어 주기 | ✅ 시연 대체 (맥 음성) | `fe` CarDevices.kt(HostSpeaker), `bridge` |
+| 전송 실패 → 재전송 (같은 id라 중복 수신 없음) | ✅ 동작 (재전송 창까지 앱에서 확인, 중복 방지는 서버 테스트) | `fe`, `be` |
+| 연결 끊김 → 재접속, 전송 중이던 메시지 같은 id로 재전송 | 코드 완료, 앱 시험 전 | `fe` WebSocketMessageGateway.kt |
+| 핸들(말하기) 버튼 | 코드 완료, 실물 연결 전 (키보드로 대신) | `firmware`, `bridge` |
+| 서버 없이 화면만 보는 demo 모드 | ✅ 동작 | `fe` MainActivity.kt |
+| 우측 깜빡이 화면, 좁은 길 양보·답장(장면 3) | 미구현 (코드표에는 있음) | — |
+
+## 아키텍처
 
 ```
-A차 앱 ── send ──▶ 중계 서버 ── msg ──▶ B차 앱
-A차 앱 ◀─ status ─ 중계 서버 ◀─ ack ─── B차 앱
+A차 입력  ─ 깜빡이: Virtual Console → Vehicle SDK
+          ─ 비상등: adb broadcast
+          ─ 핸들 버튼·들은 말: 아두이노 → 맥 음성 브리지 → adb broadcast
+   │
+   ▼
+A차 앱    CarSignals → MessagingController(후보 화면·확인창) → WebSocketMessageGateway
+   │ send   ▲ status (delivered / failed)
+   ▼        │
+중계 서버 be/ Ktor WebSocket: 코드만 전달, ack 3초 대기, 같은 id 중복 방지
+   │ msg    ▲ ack
+   ▼        │
+B차 앱    WebSocketMessageGateway → 수신 카드·빨간 경고
+          HostSpeaker → POST /speak → 맥 음성 브리지 → 스피커
 ```
 
-모든 연결은 WebSocket이다. 차량끼리 직접 통신하는 API가 없어서 서버가 중계한다.
-서버는 메시지 **코드**(`U_TURN` 등)만 넘기고, 화면 문구·TTS 문장은 앱이 코드표(`docs/messages.json`)에서 꺼낸다.
+- A차와 B차는 **같은 APK**다. 내 차 ID(`A`/`B`)만 다르게 설정한다.
+- 차량끼리 직접 통신하는 API가 없어서 서버가 중계한다. 서버는 메시지 **코드**(`DEPART` 등)만 넘기고, 화면 문구·읽을 문장은 받는 앱이 코드표(`docs/messages.json`, 23개)에서 꺼낸다.
+- **1차 시연:** 맥 한 대에 에뮬레이터 2대 + 중계 서버 + 음성 브리지.
+  **2차 PT:** 노트북 2대(차마다 하나, 각자 음성 브리지) + AWS 중계 서버. 앱은 서버 주소 설정값만 바꾼다.
+- 규약 전체는 [`docs/protocol.md`](docs/protocol.md)(앱 ↔ 서버), [`docs/device-signals.md`](docs/device-signals.md)(앱 ↔ 차량 신호·브리지).
+
+## Pleos SDK·API
+
+### 쓰는 것
+
+| SDK·API | 쓰는 곳 | 내용 |
+|---|---|---|
+| **Pleos Vehicle SDK 2.3.2** | `fe` CarDevices.kt | `Vehicle.getTurnSignal().registerTurnSignalState()`로 방향지시등 구독 (값 `LEFT` / `RIGHT` / `OFF`). 권한 `pleos.car.permission.CAR_LIGHTS`. 실제 차량에서도 그대로 쓴다 |
+| Pleos Virtual Console | 시연 | 에뮬레이터의 차량 신호(방향지시등 등)를 브라우저에서 조작 |
+| Android 표준 | `fe` | 실행 중 등록하는 BroadcastReceiver(adb 신호), OkHttp WebSocket |
+
+### 막혀서 대체한 것
+
+팀이 11/9·11/13에 Pleos Connect 에뮬레이터 2.1.0과 개발자 콘솔에서 직접 확인한 결과다.
+
+| 기능 | Pleos에서 막힌 것 | 지금 시연 구현 | 실제 차량에서는 |
+|---|---|---|---|
+| 받은 메시지 읽어 주기 (TTS) | TextToSpeech 3.3.1: 콘솔 "준비 중", 에뮬레이터에서 `ON_DEVICE_ENGINE_ERROR` | 앱 → `POST /speak` → 맥 음성(say) | Pleos TTS SDK. `HostSpeaker` 자리만 교체 |
+| 말로 고르기 (STT) | SpeechToText 3.3.1: 같은 상태 | 맥 마이크 → faster-whisper 인식 → adb `VOICE_RESULT` | Pleos STT SDK. 앱의 입력 자리(`recognize(text)`)는 그대로 |
+| 핸들(말하기) 버튼 | 스티어링 휠 음성 버튼 API 없음 (공개된 건 미디어 키·CCP Back 키) | 아두이노 버튼 → 맥 브리지 → adb `PTT` | 버튼 API가 열리면 그것, 아니면 미디어 키·화면 버튼 |
+| 비상등 감지 | Vehicle SDK(19개 영역)에 비상등 없음 | adb `HAZARD` 신호 | 비상등 API가 열리면 그것, 또는 Android Automotive 표준 `HAZARD_LIGHTS_STATE` |
+| 차량 간 통신 | V2X·푸시·메시징 API 없음 | 자체 중계 서버 (WebSocket) | 같은 구조를 이동통신망으로. 인증·차량 식별 추가 |
+| 받을 차 정하기 | 위치 SDK(FusedLocation) "준비 중" | 서버에 접속한 다른 차 전원 | 반경 내 차량, 또는 번호판 인식으로 지정 |
+| HUD(앞유리) 표시 | HUD·계기판 표시 API 없음 | 인포테인먼트 화면의 카드 + 음성 | HUD API가 열리면 HUD |
+
+## 설계 결정 (개발자 관점)
+
+- **앱은 신호가 어디서 오는지 모른다.** Vehicle SDK·adb·브리지 신호는 `CarSignals` 한 곳에서 앱 이벤트로 바뀌고, 읽기는 `HostSpeaker` 한 곳에서 나간다. Pleos API가 열리면 이 두 곳만 바꾸면 되고, 화면·상태 코드는 그대로다. 시연용과 실차용이 같은 APK가 되는 이유다.
+- **정해진 문구만, 반드시 확인창을 거쳐 보낸다.** 운전 중 자유 입력을 없애고, 터치로 골라도 말로 골라도 같은 "선택" → 확인창을 거쳐 잘못 고른 메시지가 바로 나가지 않게 했다.
+- **주행 중 통신이 끊기는 것을 전제로 한다.** 메시지마다 UUID를 붙이고, 받은 차의 ack로 3초 안에 결과(전송 완료/실패)를 확정한다. 실패하면 같은 id로 다시 보내고 서버가 중복 전달을 막는다. 끊기면 1초 → 최대 10초 간격으로 재접속하고, 전송 중이던 메시지를 같은 id로 다시 보낸다.
+- **서버는 코드만 전달하고 아무것도 저장하지 않는다.** 문구는 받는 앱이 코드표에서 찾으므로 문구를 바꿔도 서버는 그대로다. 상태는 메모리에만 두고 DB가 없어서, 위치·대화 기록이 남지 않는다.
+- **서버는 Kotlin + Ktor.** 앱과 같은 언어이고, WebSocket 중계만 하는 작은 서버라 무거운 프레임워크 대신 가벼운 Ktor를 골랐다. 규약 흐름(정상, 받을 차 없음, 시간 초과, 재전송, 끊긴 뒤 재전송, 전원 전송, 답장, 형식 오류)을 테스트 8개로 검증한다.
+
+## 추후 개발 계획
+
+### 2차 PT(12/3~4) 전
+
+| 순서 | 기능 | 내용 |
+|---|---|---|
+| 0 | 확인까지 음성으로 | 확인창에서도 핸들 버튼 + "확인"·"취소"를 알아듣게 해서 운전 중 터치를 없앤다 |
+| 1 | 번호판 인식 | 라즈베리파이 카메라로 앞차 번호판을 읽어 메시지를 받을 차를 정한다 (번호판 ↔ 차량 ID 연결, 규약 변경) |
+| 2 | 핸들 버튼 실물 | 아두이노를 맥 브리지에 연결 (코드는 완료) |
+| 3 | HUD 대체 | 받은 메시지를 앞유리 HUD처럼 보여 주는 웹 화면 |
+| — | 중계 서버 | AWS 배포, 암호화(`wss://`), 접속 인증 |
+
+### 그다음
+
+- 문구로 고르기 ("출발합니다 보내줘"). 지금은 번호로만 고른다
+- 우측 깜빡이 화면, 좁은 길 양보·답장 장면 (버튼 코드 7개, `replyTo`는 서버가 이미 지원)
+- 주변 반경(예: 300m) 차량에만 보내기 (위치 SDK가 열리면)
+- 실차 전환: Pleos STT·TTS·비상등 API가 열리면 `CarSignals`·`HostSpeaker`만 교체
+
+### 알려진 한계
+
+- 서버에 인증이 없고 저장소가 공개라, 누군가 같은 차량 ID로 접속하면 기존 연결이 끊긴다. 2차 PT 전에 추측하기 어려운 ID나 접속 토큰을 쓴다
+- 비상등은 대체 신호라 Virtual Console의 비상등과 앱 신호를 따로 켜야 한다 (에뮬레이터 제한으로 자동 연동 불가)
+- 음성 인식은 주변 소음에 약하다. 알아듣지 못하면 터치로 고른다
 
 ## 폴더 구조
 
@@ -53,6 +148,7 @@ car-talk/
 | Android Studio | 최신 | 앱 | |
 | Pleos Connect Emulator | 2.1.0 (AAOS, API 34) | 앱 | Apple Silicon 맥은 ARM64 이미지 |
 | Android 프로젝트 설정 | minSdk 28 이상, Gradle 8 이상 | 앱 | 공모전 요건 |
+| Python | **3.12** | 맥 음성 브리지 | 3.14 이상은 음성 인식 라이브러리가 설치되지 않는다. 읽기 전용(`--speak-only`)은 표준 라이브러리만 써서 버전 상관없음 |
 
 Gradle·Kotlin·Ktor는 따로 설치하지 않는다. `./gradlew`가 처음 실행될 때 알아서 받는다 (첫 실행만 몇 분).
 
@@ -60,7 +156,7 @@ Gradle·Kotlin·Ktor는 따로 설치하지 않는다. `./gradlew`가 처음 실
 
 1. [developers.pleos.ai](https://developers.pleos.ai) 가입 → Pleos Playground에서 프로젝트 생성
 2. Vehicle SDK(방향지시등 조회)·NaviHelper SDK는 신청 없이 바로 사용 가능
-3. TTS·STT SDK는 콘솔에 아직 "준비 중"이고, 에뮬레이터에서는 엔진 오류(`ON_DEVICE_ENGINE_ERROR`)가 난다 → 시연은 맥 음성 브리지가 듣고 읽는다 ([`docs/device-signals.md`](docs/device-signals.md)). 실차용으로는 Pleos STT·TTS 구현을 같이 두고 설정값 `VOICE_ENGINE`으로 고른다
+3. TTS·STT SDK는 콘솔에 아직 "준비 중"이고, 에뮬레이터에서는 엔진 오류(`ON_DEVICE_ENGINE_ERROR`)가 난다 → 시연은 맥 음성 브리지가 듣고 읽는다 ([`docs/device-signals.md`](docs/device-signals.md), 위 [Pleos SDK·API](#pleos-sdkapi))
 4. 에뮬레이터 설치, Virtual Console(차량 신호 시뮬레이션) 사용법은 같은 사이트 가이드를 따른다
 
 ## 시작하기
@@ -174,7 +270,7 @@ ws.send(JSON.stringify({ type: 'send', id: 'b-' + Date.now(), code: 'I_YIELD', t
 | 항목 | 내용 |
 |---|---|
 | 에뮬레이터 | Pleos Connect Emulator 2.1.0 (AAOS, API 34, 2560×1440) 2대. A차 `emulator-5554`, B차 `emulator-5556`, 같은 APK |
-| 확인한 환경 | Apple Silicon 맥 1대에 에뮬레이터 2대 + 서버 + 음성 브리지. 장면 1·2 번갈아 10회 연속 성공 (11/11) |
+| 확인한 환경 | Apple Silicon 맥 1대에 에뮬레이터 2대 + 서버 + 음성 브리지. 장면 1·2 번갈아 10회 연속 성공 (11/11). 다른 팀원 맥에서도 터치·음성으로 장면 1·2 통과, 서버 전달 0.04초 이내 (11/13) |
 | 앱 권한 | `INTERNET`, `pleos.car.permission.CAR_LIGHTS`(방향지시등). 둘 다 설치할 때 자동 허용된다 |
 | 차량 신호 | 방향지시등은 Virtual Console → Vehicle SDK. 비상등·핸들 버튼·들은 말은 adb broadcast ([`docs/device-signals.md`](docs/device-signals.md)) |
 | 음성 | Pleos STT·TTS는 에뮬레이터에서 엔진 오류가 나서, 맥 음성 브리지가 듣고 읽는다 |
@@ -198,10 +294,7 @@ ws.send(JSON.stringify({ type: 'send', id: 'b-' + Date.now(), code: 'I_YIELD', t
    adb -s emulator-5554 shell pm disable-user --user 10 ai.umos.car.evs
    ```
 
-### 알려진 제한 (1차)
-
-- 우측 깜빡이 후보 화면은 아직 없다 (1차 장면은 좌측만)
-- 말로 고르기는 번호("N번 메시지 보내줘")만 알아듣는다
+1차 범위와 알려진 한계는 위 [주요 개발 범위](#주요-개발-범위-1차), [추후 개발 계획](#추후-개발-계획) 참고.
 
 ## APK
 
