@@ -8,6 +8,8 @@
 2. 기기의 파일 앱에서 APK를 열어 설치합니다. 설치 권한 안내가 뜨면 APK를 연 앱에 설치 권한을 허용합니다.
 3. 앱 목록에서 `Car Talk`을 열고 오른쪽 위 `시연 ⋮`에서 확인할 Flow를 선택합니다.
 
+서버 주소를 주지 않고 열면 서버 없이 화면만 보는 시연 모드로 열립니다. 두 차 사이 실제 전달은 저장소 루트 [README](../README.md)의 실행 방법을 따릅니다.
+
 PC에서는 Android Studio의 Device Manager에서 가상 기기를 실행하고, 에뮬레이터 창에 APK를 끌어 놓아 설치할 수 있습니다. 프로젝트를 수정하며 확인하려면 Android Studio에서 이 `fe` 폴더를 열고 Gradle 동기화 후 `app`과 실행 기기를 선택해 Run을 누릅니다.
 
 ## 소스에서 빌드
@@ -39,6 +41,8 @@ adb shell am start -n com.hyundaiproject.messaging/.MainActivity
 | Flow 6 · 다음 전송 결과 - 실패 | 다음 메시지 전송 1회를 실패로 설정합니다. |
 | Flow 7 · mainpage | 메인페이지를 엽니다. 메시지 카드는 화면 표시용입니다. |
 
+서버 주소를 주어 실행하면(`--es server ws://...`) 가짜 응답용인 Flow 3·5·6은 메뉴에서 숨겨집니다.
+
 Flow 5와 6은 화면을 이동해도 다음 전송까지 적용됩니다. 예를 들어 메인페이지에서 Flow 6을 선택한 뒤 Flow 1이나 2를 열어 메시지를 보내면 실패 안내가 뜹니다. 실패 안내 3초 뒤 재전송 확인이 표시되며, `확인`을 누르면 같은 메시지를 다시 전송합니다. 전송 결과는 한 번 사용하면 기본값인 성공으로 돌아갑니다.
 
 전송 완료 안내는 3초 뒤 닫히고 해당 메시지 목록으로 돌아갑니다. 빨간 경고는 표시되는 4초 동안 두 강조 효과를 번갈아 보여주며, 탭하면 바로 닫힙니다. Android API 28~30에서는 배경을 어둡게 하고 API 31 이상에서는 흐림 효과를 함께 적용합니다.
@@ -54,6 +58,6 @@ Android Studio에서 `app`을 Debug로 실행하고, `시연`에서 확인할 �
 ## 연동 위치
 
 - `MessageGateway.java`는 송신과 수신을 연결하는 인터페이스입니다. `send()`에는 메시지 코드, 문구, 요청 ID가 전달됩니다. 백엔드가 정한 전송 성공 시점에 `SUCCESS`를 돌려주고, 실패 시 `FAILURE`를 돌려주세요. 앱은 8초 동안 응답이 없을 때도 실패로 처리합니다. 재전송은 같은 요청 ID를 사용하므로 서버에서도 이 ID로 중복 전송을 막을 수 있습니다.
-- `subscribe()`의 수신 이벤트에는 `CRITICAL` 또는 `NOTICE`, 문구, 필요한 경우 가린 발신자 표시를 전달합니다. 실제 연동에서는 `DemoMessageGateway`를 서버 어댑터로 교체합니다.
-- 실제 음성 인식 서비스에서는 인식 시작과 종료, 인식 결과를 `MessagingController.startListening()`, `stopListening()`, `recognize()`에 메인 스레드에서 전달합니다. 시연 앱은 해당 이벤트를 메뉴에서 발생시킵니다.
-- 앱 화면 바깥의 시스템 알림, 실제 차량 신호, 마이크와 서버는 연결 전입니다. 앱의 `시연` 메뉴에서 시나리오를 실행할 수 있습니다.
+- `subscribe()`의 수신 이벤트에는 `CRITICAL` 또는 `NOTICE`, 문구, 필요한 경우 가린 발신자 표시를 전달합니다. 서버 연결은 `WebSocketMessageGateway.kt`가 구현하고(규약은 `docs/protocol.md`), `DemoMessageGateway`는 서버 없는 시연 모드에서 씁니다.
+- 핸들 버튼과 들은 말은 맥 음성 브리지가 adb 신호로 보내고, `CarDevices.kt`가 `MessagingController.startListening()`, `recognize()`에 전달합니다. 시연 메뉴의 Flow 4도 같은 함수를 씁니다.
+- 차량 신호(방향지시등은 Pleos Vehicle SDK, 비상등·핸들 버튼·들은 말은 adb 신호), 중계 서버, 음성 읽기는 연결돼 있습니다. 구조와 실행 방법은 저장소 루트 [README](../README.md)에 있습니다.

@@ -1,6 +1,13 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application") version "8.9.1"
     id("org.jetbrains.kotlin.android") version "2.1.20"
+}
+
+// release 서명 정보는 저장소에 올리지 않는 fe/local.properties에서 읽는다. 없으면 서명 없이 빌드된다
+val releaseSigning = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
 
 android {
@@ -18,6 +25,21 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    signingConfigs {
+        create("release") {
+            releaseSigning.getProperty("release.storeFile")?.let { storeFile = file(it) }
+            storePassword = releaseSigning.getProperty("release.storePassword")
+            keyAlias = releaseSigning.getProperty("release.keyAlias")
+            keyPassword = releaseSigning.getProperty("release.keyPassword")
+        }
+    }
+
+    buildTypes {
+        release {
+            if (releaseSigning.getProperty("release.storeFile") != null) signingConfig = signingConfigs.getByName("release")
+        }
     }
 }
 

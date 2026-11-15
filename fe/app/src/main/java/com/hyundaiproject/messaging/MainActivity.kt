@@ -97,14 +97,14 @@ class MainActivity : Activity() {
     /**
      * 설정값은 실행할 때 넘기면 저장된다. 예) B차, 맥 서버 18080 포트:
      * adb -s emulator-5556 shell am start -S -n com.hyundaiproject.messaging/.MainActivity --es car B --es server ws://10.0.2.2:18080
-     * server를 demo로 주면 서버 없이 가짜 응답으로 화면만 시연한다.
+     * server를 주지 않았거나 demo면 서버 없이 가짜 응답으로 화면만 시연한다 (APK만 깔아 보는 심사용 기본값).
      */
     private fun createGateway(): MessageGateway {
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
         prefs.edit().apply {
             for (key in listOf("car", "server", "bridge", "plates")) intent.getStringExtra(key)?.let { putString(key, it) }
         }.apply()
-        val server = prefs.getString("server", null) ?: "ws://10.0.2.2:8080"
+        val server = prefs.getString("server", null) ?: "demo"
         val car = prefs.getString("car", null) ?: "A"
         val bridge = prefs.getString("bridge", null) ?: "http://10.0.2.2:8090" // 맥 음성 브리지
         Toast.makeText(this, if (server == "demo") "시연 모드 (서버 없음)" else "${car}차 · $server", Toast.LENGTH_LONG).show()

@@ -5,6 +5,16 @@
 
 > 현대자동차그룹 차량용 앱 개발 공모전 출품작
 
+**빠르게 보기:** [`apk/길위의친구들_CarTalk_release.apk`](apk/길위의친구들_CarTalk_release.apk)를 Pleos Connect 에뮬레이터에 설치하고 앱 아이콘으로 열면, 서버 없이 화면 흐름을 보는 시연 모드로 열린다(오른쪽 위 `시연` 메뉴). 두 차 사이 실제 전달은 [실행 방법](#실행-방법), 자세한 안내는 [APK](#apk).
+
+## 화면
+
+| A차: 비상등을 켜면 뜨는 후보 | B차: 비상등 메시지 수신 | B차: 방향지시등 메시지 수신 |
+|---|---|---|
+| ![A차 비상등 후보 화면](docs/images/candidates.jpg) | ![B차 빨간 경고](docs/images/receive-alert.jpg) | ![B차 수신 카드](docs/images/receive-card.jpg) |
+
+Pleos Connect Emulator 2.1.0(2560×1440) 두 대가 중계 서버를 거쳐 주고받은 실제 화면이다. 받은 메시지는 음성으로도 읽어 준다.
+
 ## 주요 개발 범위 (1차)
 
 1차 시연 장면 두 개가 Pleos 에뮬레이터 두 대에서 끝까지 동작한다.
@@ -26,7 +36,7 @@
 | 전송 실패 → 재전송 (같은 id라 중복 수신 없음) | ✅ 동작 (재전송 창까지 앱에서 확인, 중복 방지는 서버 테스트) | `fe`, `be` |
 | 연결 끊김 → 재접속, 전송 중이던 메시지 같은 id로 재전송 | 코드 완료, 앱 시험 전 | `fe` WebSocketMessageGateway.kt |
 | 핸들(말하기) 버튼 | 코드 완료, 실물 연결 전 (키보드로 대신) | `firmware`, `bridge` |
-| 서버 없이 화면만 보는 demo 모드 | ✅ 동작 | `fe` MainActivity.kt |
+| 서버 없이 화면 흐름만 보는 시연 모드 (서버 주소를 주지 않으면 기본) | ✅ 동작 | `fe` MainActivity.kt, DemoMessageGateway.kt |
 | 우측 깜빡이 화면, 좁은 길 양보·답장(장면 3) | 미구현 (코드표에는 있음) | — |
 
 ## 아키텍처
@@ -133,6 +143,7 @@ car-talk/
 │   └── device-signals.md     앱 ↔ 차량 신호·맥 음성 브리지 (adb, 아두이노)
 ├── bridge/                   맥 음성 브리지: 아두이노 버튼·음성 인식·읽기 (사용법은 bridge/README.md)
 ├── firmware/                 아두이노 핸들 버튼
+├── plate/                    번호판 카메라 데모 (라즈베리파이)
 ├── infra/                    서버 배포 (예정)
 └── apk/                      제출용 release APK
 ```
@@ -159,7 +170,7 @@ Gradle·Kotlin·Ktor는 따로 설치하지 않는다. `./gradlew`가 처음 실
 3. TTS·STT SDK는 콘솔에 아직 "준비 중"이고, 에뮬레이터에서는 엔진 오류(`ON_DEVICE_ENGINE_ERROR`)가 난다 → 시연은 맥 음성 브리지가 듣고 읽는다 ([`docs/device-signals.md`](docs/device-signals.md), 위 [Pleos SDK·API](#pleos-sdkapi))
 4. 에뮬레이터 설치, Virtual Console(차량 신호 시뮬레이션) 사용법은 같은 사이트 가이드를 따른다
 
-## 시작하기
+## 실행 방법
 
 ### 1. 받기
 
@@ -207,7 +218,7 @@ adb -s emulator-5556 shell am start -S -n com.hyundaiproject.messaging/.MainActi
 | 설정 | 기본값 | 설명 |
 |---|---|---|
 | `car` | `A` | 내 차 ID. 두 차는 반드시 다르게 (같으면 서로 연결을 끊어낸다) |
-| `server` | `ws://10.0.2.2:8080` | 중계 서버. `10.0.2.2`는 에뮬레이터에서 본 맥. 2차 PT는 AWS 주소. `demo`를 주면 서버 없이 가짜 응답으로 화면만 시연 |
+| `server` | `demo` | 중계 서버 주소. 주지 않으면(`demo`) 서버 없이 가짜 응답으로 화면만 시연한다. 같은 맥의 서버는 `ws://10.0.2.2:8080`(`10.0.2.2`는 에뮬레이터에서 본 맥), 2차 PT는 AWS 주소 |
 | `bridge` | `http://10.0.2.2:8090` | 맥 음성 브리지. 받은 메시지를 여기로 보내 읽힌다 |
 
 ### 4. 시연 (1차 장면 1·2)
@@ -269,8 +280,10 @@ ws.send(JSON.stringify({ type: 'send', id: 'b-' + Date.now(), code: 'I_YIELD', t
 
 | 항목 | 내용 |
 |---|---|
-| 에뮬레이터 | Pleos Connect Emulator 2.1.0 (AAOS, API 34, 2560×1440) 2대. A차 `emulator-5554`, B차 `emulator-5556`, 같은 APK |
-| 확인한 환경 | Apple Silicon 맥 1대에 에뮬레이터 2대 + 서버 + 음성 브리지. 장면 1·2 번갈아 10회 연속 성공 (11/11). 다른 팀원 맥에서도 터치·음성으로 장면 1·2 통과, 서버 전달 0.04초 이내 (11/13) |
+| **에뮬레이터 버전** | **Pleos Connect Emulator 2.1.0** (Android Automotive OS, API 34) |
+| **화면 규격** | **2560×1440** (가로) |
+| 구성 | 에뮬레이터 2대. A차 `emulator-5554`, B차 `emulator-5556`, 같은 APK |
+| 확인한 환경 | Apple Silicon 맥 1대에 에뮬레이터 2대 + 서버 + 음성 브리지. 장면 1·2 번갈아 10회 연속 성공 (11/11). 다른 팀원 맥에서도 터치·음성으로 장면 1·2 통과, 서버 전달 0.04초 이내 (11/13). 제출용 release APK를 새로 설치해 아이콘 실행(시연 모드)과 실제 서버 전달 확인 (11/15) |
 | 앱 권한 | `INTERNET`, `pleos.car.permission.CAR_LIGHTS`(방향지시등). 둘 다 설치할 때 자동 허용된다 |
 | 차량 신호 | 방향지시등은 Virtual Console → Vehicle SDK. 비상등·핸들 버튼·들은 말은 adb broadcast ([`docs/device-signals.md`](docs/device-signals.md)) |
 | 음성 | Pleos STT·TTS는 에뮬레이터에서 엔진 오류가 나서, 맥 음성 브리지가 듣고 읽는다 |
@@ -279,6 +292,7 @@ ws.send(JSON.stringify({ type: 'send', id: 'b-' + Date.now(), code: 'I_YIELD', t
 
 1. Android Studio → SDK Manager → SDK Update Sites에 아래 주소 추가 → SDK Platforms에서 Android 14 (API 34) 아래 Pleos Connect 이미지 설치
    `https://nexus-playground.pleos.ai/repository/raw-releases/connect-avd/2.x/crp-arm64-sys-img.xml`
+   (Windows·Intel PC는 끝을 `crp-sys-img.xml`로 바꾼 주소. x86_64 이미지다)
 2. Device Manager → Automotive → Pleos Connect v2.1.0으로 가상 기기 2개(`Pleos`, `PleosB`). Boot는 Cold, RAM 4GB
 3. 아래 명령으로 켠다. Device Manager의 재생 버튼으로 켜면 Vulkan 문제로 부팅 뒤 죽는다.
    `emulator`·`adb`는 `~/Library/Android/sdk/emulator`, `~/Library/Android/sdk/platform-tools`에 있다
@@ -298,4 +312,12 @@ ws.send(JSON.stringify({ type: 'send', id: 'b-' + Date.now(), code: 'I_YIELD', t
 
 ## APK
 
-`apk/팀명_앱이름_release.apk` — 정식 서명한 release 빌드를 11/13에 넣는다. 그전에는 위 [앱 빌드·설치](#3-앱-빌드설치)로 debug APK를 만든다.
+[`apk/길위의친구들_CarTalk_release.apk`](apk/길위의친구들_CarTalk_release.apk) — release 빌드, 팀 키로 서명 (Pleos Connect Emulator 2.1.0에서 설치·실행 확인)
+
+```bash
+adb install apk/길위의친구들_CarTalk_release.apk
+```
+
+- **설치 후 앱 아이콘으로 바로 열면** 서버 없이 화면 흐름을 보는 시연 모드다. 오른쪽 위 `시연` 메뉴에서 비상등·좌회전 후보 목록 → 확인창 → 전송 완료, 경고 수신, 전송 실패 → 재전송, 음성으로 고르기 흐름을 볼 수 있다. 방향지시등(Virtual Console)·비상등 신호도 이 모드에서 그대로 목록을 연다.
+- **두 차 사이 실제 전달까지 보기:** 위 [실행 방법](#실행-방법)대로 서버(`be/`)를 띄우고, 에뮬레이터 두 대에서 각각 `--es car A`·`--es car B`와 `--es server ws://10.0.2.2:8080`을 주어 실행한다.
+- 소스에서 직접 빌드한 debug APK와는 서명이 달라서, 바꿔 설치할 때는 먼저 `adb uninstall com.hyundaiproject.messaging`.
