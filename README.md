@@ -175,11 +175,11 @@ Gradle·Kotlin·Ktor는 따로 설치하지 않는다. `./gradlew`가 처음 실
 ### 1. 받기
 
 ```bash
-git clone git@github.com:SongSeungYun/car-talk.git
+git clone git@github.com:friends-ontheroad/car-talk.git
 cd car-talk
 ```
 
-SSH 키가 없으면 `https://github.com/SongSeungYun/car-talk.git`로 받는다.
+SSH 키가 없으면 `https://github.com/friends-ontheroad/car-talk.git`로 받는다.
 디자인(Figma)·기획 문서 링크는 공개 저장소에 두지 않으니 팀 채널에서 받는다.
 
 ### 2. 서버 띄우기
@@ -209,6 +209,8 @@ adb -s emulator-5556 install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 처음 실행할 때 차 ID와 서버 주소를 넘긴다. 한 번 넘기면 저장되어, 다음부터는 앱 아이콘으로 열어도 된다.
+
+> **주의:** `--es server`를 빼고 실행하면 서버 없이 시연 모드로 열린다. 이때는 보내도 실제로 전달되지 않고 "전송 완료"만 뜬다. 앱을 켤 때 아래에 **"시연 모드 (서버 없음)"** 안내가 뜨면 서버 주소가 빠진 것이다.
 
 ```bash
 adb -s emulator-5554 shell am start -S -n com.hyundaiproject.messaging/.MainActivity --es car A --es server ws://10.0.2.2:8080
