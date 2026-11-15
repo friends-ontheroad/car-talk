@@ -2,6 +2,7 @@ package com.hyundaiproject.messaging
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.hyundaiproject.messaging.MessageGateway.Incoming.Kind
 import com.hyundaiproject.messaging.MessageGateway.Result
@@ -20,6 +21,16 @@ internal class WebSocketMessageGateway(
 ) : MessageGateway {
     /** 받은 메시지 문구. 맥 음성 브리지로 읽을 때 쓴다 */
     var onReceived: (String) -> Unit = {}
+
+    /**
+     * 번호판 거르기(시연용, 받는 앱에서 거름). 보낸 차 → 그 차 번호판. 비어 있으면 지금처럼 받는 즉시 띄운다.
+     * 들어 있으면 그 차의 메시지는 쥐고 있다가, 카메라가 그 번호판을 보면(seen) 띄운다.
+     * ack는 규약대로 바로 보내므로 보낸 차는 "전송 완료"가 된다.
+     */
+    var plates: Map<String, String> = emptyMap()
+    private class Held(val incoming: MessageGateway.Incoming, val text: String, val at: Long)
+    private val held = HashMap<String, Held>()     // 보낸 차 → 아직 안 띄운 메시지
+    private val lastSeen = HashMap<String, Long>() // 번호판 → 마지막으로 본 시각
 
     private val handler = Handler(Looper.getMainLooper()) // 재접속 예약 전용 (MainActivity가 자기 핸들러를 통째로 비우므로 따로 둔다)
     private val client = OkHttpClient.Builder().pingInterval(15, TimeUnit.SECONDS).build()
@@ -50,6 +61,21 @@ internal class WebSocketMessageGateway(
         return MessageGateway.Cancellation {
             synchronized(lock) { if (this.receiver === receiver) this.receiver = null }
         }
+    }
+
+    /** 카메라가 번호판을 봤다. 그 차가 보낸 메시지를 쥐고 있으면 지금 띄운다 */
+    fun seen(plate: String) {
+        val key = plate.filterNot(Char::isWhitespace)
+        val now = SystemClock.elapsedRealtime()
+        val (message, target) = synchronized(lock) {
+            lastSeen[key] = now
+            val from = plates.entries.firstOrNull { it.value == key }?.key
+            (from?.let { held.remove(it) }?.takeIf { now - it.at <= HOLD_MS }) to receiver
+        }
+        Log.i(TAG, "seen $key, show=${message != null}")
+        message ?: return
+        target?.onMessage(message.incoming)
+        onReceived(message.text)
     }
 
     fun close() {
@@ -123,7 +149,22 @@ internal class WebSocketMessageGateway(
                 val preset = MessageCatalog.find(message.optString("code"))
                 if (!first || preset == null) return
                 val kind = if (MessageCatalog.critical(preset.code())) Kind.CRITICAL else Kind.NOTICE
-                target?.onMessage(MessageGateway.Incoming(kind, preset.text(), message.optString("from") + "차"))
+                val from = message.optString("from")
+                val incoming = MessageGateway.Incoming(kind, preset.text(), from + "차")
+                val plate = plates[from]
+                if (plate != null) {
+                    val now = SystemClock.elapsedRealtime()
+                    val showNow = synchronized(lock) {
+                        val recent = lastSeen[plate]?.let { now - it <= SEEN_MS } == true
+                        if (!recent) held[from] = Held(incoming, preset.text(), now)
+                        recent
+                    }
+                    if (!showNow) {
+                        Log.i(TAG, "holding message from $from until $plate is seen")
+                        return
+                    }
+                }
+                target?.onMessage(incoming)
                 onReceived(preset.text())
             }
             "error" -> Log.w(TAG, "server error: $text")
@@ -132,5 +173,7 @@ internal class WebSocketMessageGateway(
 
     private companion object {
         const val TAG = "CarMessage"
+        const val HOLD_MS = 60_000L // 쥐고 있는 최대 시간 (깜빡이 기준 60초)
+        const val SEEN_MS = 5_000L  // 이 시간 안에 본 번호판이면 "보고 있음"
     }
 }

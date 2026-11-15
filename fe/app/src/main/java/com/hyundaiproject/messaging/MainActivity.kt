@@ -34,7 +34,8 @@ class MainActivity : Activity() {
         board.onDemo = ::showDemoMenu
         setContentView(board)
         board.render(controller.screen())
-        signals = CarSignals(this, ::onTurnSignal, ::onHazard, controller::startListening, controller::recognize)
+        signals = CarSignals(this, ::onTurnSignal, ::onHazard, controller::startListening, controller::recognize,
+            onSeen = { plate -> (gateway as? WebSocketMessageGateway)?.seen(plate) })
         signals.start()
     }
 
@@ -101,14 +102,23 @@ class MainActivity : Activity() {
     private fun createGateway(): MessageGateway {
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
         prefs.edit().apply {
-            for (key in listOf("car", "server", "bridge")) intent.getStringExtra(key)?.let { putString(key, it) }
+            for (key in listOf("car", "server", "bridge", "plates")) intent.getStringExtra(key)?.let { putString(key, it) }
         }.apply()
         val server = prefs.getString("server", null) ?: "ws://10.0.2.2:8080"
         val car = prefs.getString("car", null) ?: "A"
         val bridge = prefs.getString("bridge", null) ?: "http://10.0.2.2:8090" // 맥 음성 브리지
         Toast.makeText(this, if (server == "demo") "시연 모드 (서버 없음)" else "${car}차 · $server", Toast.LENGTH_LONG).show()
         if (server == "demo") return DemoMessageGateway(handler)
-        return WebSocketMessageGateway(server, car).apply { onReceived = HostSpeaker(bridge, car)::speak }
+        // 번호판 거르기(시연용): --es plates A=12가3456 (여러 대는 쉼표). 끄려면 --es plates off
+        val plates = prefs.getString("plates", null).orEmpty().split(",").mapNotNull { pair ->
+            val parts = pair.split("=", limit = 2).map { it.filterNot(Char::isWhitespace) }
+            if (parts.size == 2 && parts[0].isNotEmpty() && parts[1].isNotEmpty()) parts[0] to parts[1] else null
+        }.toMap()
+        if (plates.isNotEmpty()) Toast.makeText(this, "번호판 거르기: $plates", Toast.LENGTH_LONG).show()
+        return WebSocketMessageGateway(server, car).apply {
+            onReceived = HostSpeaker(bridge, car)::speak
+            this.plates = plates
+        }
     }
 
     private fun setDemoResult(result: Result): Boolean {

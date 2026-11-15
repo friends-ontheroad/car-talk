@@ -7,6 +7,8 @@
   3. 버튼을 떼면 녹음을 멈추고 한국어로 인식해서 앱에 `VOICE_RESULT` 신호를 보낸다.
      (`PTT UP`은 보내지 않는다. 앱은 결과를 받으면 듣기를 끝낸다.)
   4. 앱이 `POST http://10.0.2.2:8090/speak {"car":"B","text":"..."}`를 보내면 맥 스피커로 읽는다.
+  5. (--plate-port) 라즈베리파이 카메라가 TCP로 보낸 `PLATE:<번호판>` 줄을 받아
+     받는 차(--seen-serial, 기본 B차)에 `SEEN --es plate <번호판>` 신호를 보낸다.
 
 무거운 라이브러리(마이크·인식·시리얼)는 쓸 때만 불러온다.
 그래서 `--check`, `--say`, 키보드 모드, 테스트는 일부 라이브러리가 없어도 돈다.
@@ -21,6 +23,8 @@ import queue
 import re
 import shlex
 import shutil
+import socket
+import socketserver
 import subprocess
 import sys
 import threading
@@ -57,6 +61,46 @@ _WORD_ALT = "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True))
 _NUMBER_RE = re.compile(rf"(?<![가-힣0-9])(10|[1-9]|{_WORD_ALT})\s*(?:번째|번)")
 _SEND_HINT_RE = re.compile(r"보내|전송|메시지|메세지")
 _RETRY_RE = re.compile(r"재\s*전송|다시\s*보내")
+
+_PLATE_LINE_RE = re.compile(r"^PLATE:(\S+)$")
+
+
+def parse_plate_line(line: str) -> str | None:
+    """`PLATE:12가3456` → `12가3456`. 형식이 다르면 None."""
+    m = _PLATE_LINE_RE.match(line.strip())
+    return m.group(1) if m else None
+
+
+def start_plate_listener(adb_seen: "Adb", port: int):
+    """라즈베리파이 카메라의 TCP 줄을 받아 받는 차에 SEEN 신호로 넘긴다."""
+
+    class Handler(socketserver.StreamRequestHandler):
+        def handle(self):
+            log.info("카메라 연결: %s", self.client_address[0].removeprefix("::ffff:"))
+            for raw in self.rfile:
+                line = raw.decode("utf-8", "replace").strip()
+                plate = parse_plate_line(line)
+                if plate:
+                    adb_seen.broadcast("SEEN", "plate", plate)
+                elif line:
+                    log.warning("카메라: 모르는 줄 %r", line)
+            log.info("카메라 끊김: %s", self.client_address[0])
+
+    class DualStackServer(socketserver.ThreadingTCPServer):
+        # IPv4·IPv6 둘 다 받는다 (아이폰 핫스팟에서 맥이 IPv6만 쓰는 경우가 있다)
+        address_family = socket.AF_INET6
+        allow_reuse_address = True
+        daemon_threads = True
+
+        def server_bind(self):
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            super().server_bind()
+
+    server = DualStackServer(("::", port), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    log.info("번호판 줄 대기: TCP %d → SEEN은 %s", port, adb_seen.serial)
+    return server
+
 
 WHISPER_PROMPT = "1번 메시지 보내줘. 2번 메시지 보내줘. 3번 메시지 보내줘. 재전송해줘."
 
@@ -368,6 +412,9 @@ def main(argv=None) -> int:
     p.add_argument("--package", default=DEFAULT_PACKAGE)
     p.add_argument("--port", type=int, default=8090, help="/speak 받는 포트")
     p.add_argument("--speak-only", action="store_true", help="읽기만 (노트북 2, B차)")
+    p.add_argument("--plate-port", type=int, default=0,
+                   help="라즈베리파이 카메라 PLATE 줄을 받을 TCP 포트 (0 = 끔, 보통 9100)")
+    p.add_argument("--seen-serial", default="emulator-5556", help="SEEN 신호를 보낼 차(기본 B차)")
     p.add_argument("--model", default="small", help="faster-whisper 모델: tiny|base|small|medium")
     p.add_argument("--mic", default=None, help="마이크 장치 이름 또는 번호 (기본 = 시스템 기본)")
     p.add_argument("--voice", default="auto", help="say 목소리. auto = 첫 한국어 목소리")
@@ -398,6 +445,10 @@ def main(argv=None) -> int:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log.info("/speak 대기: http://127.0.0.1:%d/speak (에뮬레이터에서는 http://10.0.2.2:%d/speak), 목소리=%s",
              args.port, args.port, voice or "기본")
+
+    if args.plate_port:
+        start_plate_listener(Adb(args.adb, args.seen_serial or None, args.package, args.dry_run),
+                             args.plate_port)
 
     if args.speak_only:
         log.info("읽기 전용 모드. 끝내려면 Ctrl+C")

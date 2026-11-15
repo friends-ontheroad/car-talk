@@ -26,6 +26,7 @@ private const val PREFIX = "com.hyundaiproject.messaging."
 private const val HAZARD = PREFIX + "HAZARD"
 private const val PTT = PREFIX + "PTT"
 private const val VOICE_RESULT = PREFIX + "VOICE_RESULT"
+private const val SEEN = PREFIX + "SEEN" // 카메라(맥 브리지)가 번호판을 봄
 
 /**
  * 차량 신호를 앱 안 이벤트로 바꾼다. 신호가 어디서 오는지(Vehicle SDK·adb·맥 음성 브리지)는 여기만 안다.
@@ -37,6 +38,7 @@ internal class CarSignals(
     private val onHazard: (Boolean) -> Unit,
     private val onTalkButton: () -> Unit,       // 버튼 누름 = 듣기 시작
     private val onHeard: (String) -> Unit,      // 들은 말. 버튼을 떼면 PTT UP 없이 이것만 온다
+    private val onSeen: (String) -> Unit = {},  // 카메라가 본 번호판
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var vehicle: Vehicle? = null
@@ -57,6 +59,7 @@ internal class CarSignals(
                 HAZARD -> onHazard(intent.getStringExtra("state") == "ON")
                 PTT -> if (intent.getStringExtra("state") == "DOWN") onTalkButton()
                 VOICE_RESULT -> onHeard(intent.getStringExtra("text").orEmpty())
+                SEEN -> intent.getStringExtra("plate")?.let(onSeen)
             }
         }
     }
@@ -66,6 +69,7 @@ internal class CarSignals(
             addAction(HAZARD)
             addAction(PTT)
             addAction(VOICE_RESULT)
+            addAction(SEEN)
         }
         // adb 셸에서 오는 신호라 exported로 받는다
         if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
